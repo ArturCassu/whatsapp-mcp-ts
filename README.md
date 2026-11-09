@@ -73,6 +73,25 @@ The server exposes the following tools to the connected AI agent:
 * `get_message_context`: Retrieve messages sent immediately before and after a specific message ID for context.
 * `send_message`: Send a text message to a specified recipient JID (user or group).
 
+## HTTP MCP for Grok Bot (`zap serve`)
+
+Grok Bot cannot reach localhost/stdio MCP. On a machine next to the phone (e.g. Omen):
+
+```bash
+npm link          # once — installs the `zap` CLI
+zap pair          # first time / re-pair (Cursor WhatsApp MCP must be disabled)
+zap serve         # owns Baileys + Streamable HTTP MCP + Cloudflare quick tunnel
+```
+
+- Local: `http://127.0.0.1:8787/mcp` (bearer: `ZAP_MCP_TOKEN`)
+- Health: `GET /health` (no auth)
+- Public: `https://….trycloudflare.com/mcp` (printed at startup; also `.env.local`)
+- Grok Bot: `Add this MCP server: https://….trycloudflare.com/mcp` plus `Authorization: Bearer <token>`
+- **One socket only:** keep Cursor `mcp.json` WhatsApp `"disabled": true` while `zap serve` runs
+- Never commit `auth_info/`, `data/`, or `.env.local`. Unofficial WA — no bulk send.
+
+Stop with Ctrl+C. Flags: `zap serve --no-tunnel`, `zap serve --port 8787`.
+
 ## Installation
 
 ### Installing via Smithery

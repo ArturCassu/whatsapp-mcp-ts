@@ -10,8 +10,9 @@ import {
   jidNormalizedUser,
 } from "@whiskeysockets/baileys";
 import P from "pino";
+import fs from "node:fs";
 import path from "node:path";
-import open from "open";
+import qrcodeTerminal from "qrcode-terminal";
 
 import {
   initializeDatabase,
@@ -21,7 +22,68 @@ import {
   type Message as DbMessage,
 } from "./database.ts";
 
-const AUTH_DIR = path.join(import.meta.dirname, "..", "auth_info");
+export const AUTH_DIR = path.join(import.meta.dirname, "..", "auth_info");
+const CREDS_PATH = path.join(AUTH_DIR, "creds.json");
+
+/** Linked Devices display name — keep short; changing it requires re-pair. */
+export const DEVICE_BROWSER: [string, string, string] = ["mcp", "mcp", "1.0.0"];
+
+/**
+ * Print ASCII QR to the terminal only. Never open a browser or ask the user
+ * to open image/HTML files.
+ */
+function printQrAscii(qr: string): void {
+  qrcodeTerminal.generate(qr, { small: true }, (ascii: string) => {
+    console.error("\n========== WHATSAPP PAIRING QR (scan with phone) ==========");
+    console.error(ascii);
+    console.error("WhatsApp → Linked Devices → Link a Device → scan above");
+    console.error("===========================================================\n");
+  });
+}
+
+export type SessionStatus = {
+  ok: boolean;
+  registered: boolean;
+  meId: string | null;
+  meName: string | null;
+  credsPath: string;
+  credsBytes: number;
+};
+
+export function getSessionStatus(): SessionStatus {
+  const status: SessionStatus = {
+    ok: false,
+    registered: false,
+    meId: null,
+    meName: null,
+    credsPath: CREDS_PATH,
+    credsBytes: 0,
+  };
+  try {
+    if (!fs.existsSync(CREDS_PATH)) return status;
+    const raw = fs.readFileSync(CREDS_PATH, "utf8");
+    status.credsBytes = raw.length;
+    if (!raw.trim()) return status;
+    const creds = JSON.parse(raw) as {
+      registered?: boolean;
+      me?: { id?: string; name?: string };
+    };
+    status.registered = Boolean(creds.registered);
+    status.meId = creds.me?.id ?? null;
+    status.meName = creds.me?.name ?? null;
+    status.ok = Boolean(status.meId) || status.registered;
+    return status;
+  } catch {
+    return status;
+  }
+}
+
+export type StartWhatsAppOptions = {
+  /** Called when a QR string is emitted (default: ASCII to stderr). */
+  onQr?: (qr: string) => void;
+  /** If true, resolves only after connection === "open". */
+  waitUntilOpen?: boolean;
+};
 
 export type WhatsAppSocket = ReturnType<typeof makeWASocket>;
 
@@ -95,7 +157,8 @@ function parseMessageForDb(msg: WAMessage): DbMessage | null {
 }
 
 export async function startWhatsAppConnection(
-  logger: P.Logger
+  logger: P.Logger,
+  options: StartWhatsAppOptions = {}
 ): Promise<WhatsAppSocket> {
   initializeDatabase();
 
@@ -103,9 +166,22 @@ export async function startWhatsAppConnection(
   const { version, isLatest } = await fetchLatestBaileysVersion();
   logger.info(`Using WA v${version.join(".")}, isLatest: ${isLatest}`);
 
+  const onQr = options.onQr ?? printQrAscii;
+  let resolveOpen: ((sock: WhatsAppSocket) => void) | null = null;
+  let rejectOpen: ((err: Error) => void) | null = null;
+  const openPromise =
+    options.waitUntilOpen === true
+      ? new Promise<WhatsAppSocket>((resolve, reject) => {
+          resolveOpen = resolve;
+          rejectOpen = reject;
+        })
+      : null;
+
+  // Linked Devices label is the browser tuple — default Baileys used Ubuntu/Chrome.
   const sock = makeWASocket({
     version,
     logger,
+    browser: DEVICE_BROWSER,
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
@@ -120,12 +196,8 @@ export async function startWhatsAppConnection(
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        logger.info(
-          { qrCodeData: qr },
-          "QR Code Received. Copy the qrCodeData string and use a QR code generator (e.g., online website) to display and scan it with your WhatsApp app."
-        );
-        // for now we roughly open the QR code in a browser
-        await open(`https://quickchart.io/qr?text=${encodeURIComponent(qr)}`);
+        logger.info({ qrCodeData: qr }, "QR Code received — ASCII terminal only.");
+        onQr(qr);
       }
 
       if (connection === "close") {
@@ -138,16 +210,24 @@ export async function startWhatsAppConnection(
         );
         if (statusCode !== DisconnectReason.loggedOut) {
           logger.info("Reconnecting...");
-          startWhatsAppConnection(logger);
+          // Do not re-enter waitUntilOpen (would orphan the original promise).
+          startWhatsAppConnection(logger, {
+            onQr: options.onQr,
+            waitUntilOpen: false,
+          });
         } else {
           logger.error(
             "Connection closed: Logged Out. Please delete auth_info and restart."
           );
+          rejectOpen?.(new Error("Logged out"));
           process.exit(1);
         }
       } else if (connection === "open") {
         logger.info(`Connection opened. WA user: ${sock.user?.name}`);
-        // console.log("Logged as", sock.user?.name);
+        console.error(
+          `[pairing] Connected as ${sock.user?.id ?? sock.user?.name ?? "unknown"} (device label: mcp)`
+        );
+        resolveOpen?.(sock);
       }
     }
 
@@ -242,6 +322,9 @@ export async function startWhatsAppConnection(
     }
   });
 
+  if (openPromise) {
+    return openPromise;
+  }
   return sock;
 }
 
