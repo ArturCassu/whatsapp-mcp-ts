@@ -15,8 +15,14 @@ auth_info/
 # SQLite Database (keep data local)
 data/
 
-# Environment variables
+# Ephemeral pairing QR artifacts (overwritten on each QR refresh)
+pairing-qr.html
+pairing-qr.png
+
+# Environment variables / local secrets (tokens, tunnel URL)
 .env
+.env.local
+.env.*.local
 
 # OS generated files
 .DS_Store

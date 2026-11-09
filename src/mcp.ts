@@ -51,13 +51,15 @@ function formatDbChatForJson(chat: DbChat) {
   };
 }
 
-export async function startMcpServer(
+/**
+ * Build an MCP server instance with WhatsApp tools bound to the given socket.
+ * Callers connect stdio or Streamable HTTP transports separately.
+ */
+export function createWhatsAppMcpServer(
   sock: WhatsAppSocket | null,
   mcpLogger: P.Logger,
   waLogger: P.Logger,
-): Promise<void> {
-  mcpLogger.info("Initializing MCP server...");
-
+): McpServer {
   const server = new McpServer({
     name: "whatsapp-baileys-ts",
     version: "0.1.0",
@@ -570,6 +572,16 @@ TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIM
     };
   });
 
+  return server;
+}
+
+export async function startMcpServer(
+  sock: WhatsAppSocket | null,
+  mcpLogger: P.Logger,
+  waLogger: P.Logger,
+): Promise<void> {
+  mcpLogger.info("Initializing MCP server (stdio)...");
+  const server = createWhatsAppMcpServer(sock, mcpLogger, waLogger);
   const transport = new StdioServerTransport();
   mcpLogger.info("MCP server configured. Connecting stdio transport...");
 
